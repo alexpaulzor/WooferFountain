@@ -1,0 +1,429 @@
+   1               	# 1 "suart.S"
+   1               	;---------------------------------------------------------------------------;
+   0               	
+   0               	
+   2               	; Software implemented UART via an ISP cable.                               ;
+   3               	; (C)ChaN, 2005 (http://elm-chan.org/)                                      ;
+   4               	;---------------------------------------------------------------------------;
+   5               	; MOSI and MISO are used as inverted signals to connect to RS-232C line
+   6               	; directly. The MISO pin must be configured as an output before using xmit().
+   7               	; Following definitions must be changed for each device, clock and bps.
+   8               	; Pin definitions are for most 20/40 pin devices except for TN26.
+   9               	; Any interrupt during xmit() or rcvr() is being executed will be defered
+  10               	; until end of the function. When use xmit() with any interrupt, choose
+  11               	; higher bit rate as possible to minimize critical time. But rcvr() and any
+  12               	; interrupt cannot be used simultaneously.
+  13               	;
+  14               	;            1MHz  2MHz  4MHz  6MHz  8MHz  10MHz  12MHz  16MHz  20MHz
+  15               	;   2.4kbps   138     -     -     -     -      -      -      -      -
+  16               	;   4.8kbps    68   138     -     -     -      -      -      -      -
+  17               	;   9.6kbps    33    68   138   208     -      -      -      -      -
+  18               	;  19.2kbps     -    33    68   102   138    173    208      -      -
+  19               	;  38.4kbps     -     -    33    50    68     85    102    138    172
+  20               	;  57.6kbps     -     -    21    33    44     56     68     91    114
+  21               	; 115.2kbps     -     -     -     -    21     27     33     44     56
+  22               	
+  25               	.list
+  26               	
+  27               	#define	BPS	138	/* Bit delay. (see above) */
+  28               	
+  29               	#define	TXREG	_SFR_IO_ADDR(PORTB)	/* MISO: Port and bit position */
+  30               	#define	TXBIT	PB6
+  31               	#define RXREG	_SFR_IO_ADDR(PINB)	/* MOSI: Port and bit position */
+  32               	#define	RXBIT	PB5
+  33               	
+  34               	#define USE_OUTPUT	/* Remove this when output functions are not needed */
+  35               	#define USE_INPUT	/* Remove this when input functions are not needed */
+  36               	#define USE_STRFUNCS	/* Remove this when string functions are not needed */
+  37               	
+  38               	
+  39               	#ifdef SPM_PAGESIZE
+  40               	.macro	_LPMI	reg
+  41               		lpm	\reg, Z+
+  42               	.endm
+  43               	.macro	_MOVW	dh,dl, sh,sl
+  44               		movw	\dl, \sl
+  45               	.endm
+  46               	#else
+  47               	.macro	_LPMI	reg
+  48               		lpm
+  49               		mov	\reg, r0
+  50               		adiw	ZL, 1
+  51               	.endm
+  52               	.macro	_MOVW	dh,dl, sh,sl
+  53               		mov	\dl, \sl
+  54               		mov	\dh, \sh
+  55               	.endm
+  56               	#endif
+  57               	
+  58               	
+  59               	
+  60               	#ifdef	USE_OUTPUT
+  61               	;---------------------------------------------------------------------------;
+  62               	; Transmit a byte in serial format of N81
+  63               	;
+  64               	;Prototype: void xmit (uint8_t data);
+  65               	;Size: 16 words
+  66               	
+  67               	.global xmit
+  68               	.func xmit
+  69               	xmit:
+  69:suart.S       **** 	in	r0, _SFR_IO_ADDR(SREG)	;Save flags
+  71               	
+  71:suart.S       **** 	com	r24		;C = start bit
+  72:suart.S       **** 	ldi	r25, 10		;Bit counter
+  73:suart.S       **** 	cli			;Start critical section
+  75               	
+  75:suart.S       **** 1:	ldi	r23, BPS-1	;----- Bit transferring loop 
+  76:suart.S       **** 2:	dec	r23     	;Wait for a bit time
+  77:suart.S       **** 	brne	2b		;/
+  78:suart.S       **** 	brcs	3f		;MISO = bit to be sent
+  79:suart.S       **** 	cbi	TXREG, TXBIT	;
+  80:suart.S       **** 3:	brcc	4f		;
+  81:suart.S       **** 	sbi	TXREG, TXBIT	;/
+  82:suart.S       **** 4:	lsr	r24     	;Get next bit into C
+  83:suart.S       **** 	dec	r25     	;All bits sent?
+  84:suart.S       **** 	brne	1b	     	;  no, coutinue
+  86               	
+  86:suart.S       **** 	out	_SFR_IO_ADDR(SREG), r0	;End of critical section
+  87:suart.S       **** 	ret
+  89               	.endfunc
+  90               	
+  91               	
+  92               	#ifdef USE_STRFUNCS
+  93               	;---------------------------------------------------------------------------
+  94               	; Transmit an ASCIZ string on the program memory
+  95               	;
+  96               	;Prototype: void xmitstr (const prog_char *str);
+  97               	;Size: 10/7 words
+  98               	
+  99               	.global xmitstr
+ 100               	.func xmitstr
+ 101               	xmitstr:
+ 101:suart.S       **** 	_MOVW	ZH,ZL, r25,r24	;Pointer to ASCIZ string
+ 102:suart.S       **** 1:	_LPMI	r24		;Get a character
+ 103:suart.S       **** 	tst	r24      	;Exit if end of string
+ 104:suart.S       **** 	breq	2f		;/
+ 105:suart.S       **** 	rcall	xmit		;Transmit it
+ 106:suart.S       **** 	rjmp	1b	     	;Continue
+ 107:suart.S       **** 2:	ret
+ 109               	.endfunc
+ 110               	
+ 111               	
+ 112               	
+ 113               	;---------------------------------------------------------------------------
+ 114               	; Numeral string transmission
+ 115               	;
+ 116               	;Prototype: void xmitval (uint16_t value, int8_t base, int8_t digits);
+ 117               	;Size: 51 words
+ 118               	;
+ 119               	; value  base  digits   output
+ 120               	;   100    10       6   "   100"
+ 121               	;   100    10       1   "100"
+ 122               	;  1024    16       4   " 400"
+ 123               	;  1024    16      -4   "0400"
+ 124               	;  0x55     2      -8   "01010101"
+ 125               	; 65535   -10       1   "-1"
+ 126               	
+ 127               	.global xmitval
+ 128               	.func xmitval
+ 129               	xmitval:			;r25:r24:value, r22:base, r20:digits
+ 129:suart.S       **** 	clr	r19      	;r19:stack level
+ 130:suart.S       **** 	ldi	r30, ' '	;r30:sign
+ 131:suart.S       **** 	ldi	r31, ' '	;r31:filler
+ 132:suart.S       **** 	sbrs	r22, 7		;When base indicates signd format and the value
+ 133:suart.S       **** 	rjmp	0f		;is minus, add a '-'.
+ 134:suart.S       **** 	neg	r22		;
+ 135:suart.S       **** 	sbrs	r25, 7		;
+ 136:suart.S       **** 	rjmp	0f		;
+ 137:suart.S       **** 	ldi	r30, '-'	;
+ 138:suart.S       **** 	com	r24		;
+ 139:suart.S       **** 	com	r25		;
+ 140:suart.S       **** 	adc	r24, r1		;
+ 141:suart.S       **** 	adc	r25, r1		;/
+ 142:suart.S       **** 0:	sbrs	r20, 7		;When digits indicates zero filled,
+ 143:suart.S       **** 	rjmp	1f		;filler is '0'.
+ 144:suart.S       **** 	neg	r20		;
+ 145:suart.S       **** 	ldi	r31, '0'	;/
+ 147               					;----- string conversion loop
+ 147:suart.S       **** 1:	ldi	r21, 16		;r23 = r25:r24 \ r22
+ 148:suart.S       **** 	clr	r23		;r25:r24 /= r22
+ 149:suart.S       **** 2:	lsl	r24		;
+ 150:suart.S       **** 	rol	r25		;
+ 151:suart.S       **** 	rol	r23		;
+ 152:suart.S       **** 	cp	r23, r22	;
+ 153:suart.S       **** 	brcs	3f		;
+ 154:suart.S       **** 	sub	r23, r22	;
+ 155:suart.S       **** 	inc	r24		;
+ 156:suart.S       **** 3:	dec	r21		;
+ 157:suart.S       **** 	brne	2b		;/
+ 158:suart.S       **** 	cpi	r23, 10		;r23 is a numerical digit '0'-'F'
+ 159:suart.S       **** 	brcs	4f		;
+ 160:suart.S       **** 	subi	r23, -7		;
+ 161:suart.S       **** 4:	subi	r23, -'0'	;/
+ 162:suart.S       **** 	push	r23		;Stack it
+ 163:suart.S       **** 	inc	r19		;/
+ 164:suart.S       **** 	cp	r24, r21	;Repeat until r25:r25 gets zero
+ 165:suart.S       **** 	cpc	r25, r21	;
+ 166:suart.S       **** 	brne	1b		;/
+ 168               	
+ 168:suart.S       **** 	cpi	r30, '-'	;Stack a minus sign if needed
+ 169:suart.S       **** 	brne	5f		;
+ 170:suart.S       **** 	push	r30		;
+ 171:suart.S       **** 	inc	r19		;/
+ 172:suart.S       **** 5:	cp	r19, r20	;Stack filler
+ 173:suart.S       **** 	brcc	6f		;
+ 174:suart.S       **** 	push	r31		;
+ 175:suart.S       **** 	inc	r19		;
+ 176:suart.S       **** 	rjmp	5b		;/
+ 178               	
+ 178:suart.S       **** 6:	pop	r24		;Output stacked digits and exit
+ 179:suart.S       **** 	rcall	xmit		;
+ 180:suart.S       **** 	dec	r19		;
+ 181:suart.S       **** 	brne	6b		;
+ 182:suart.S       **** 	ret			;/
+ 184               	.endfunc
+ 185               	
+ 186               	
+ 187               	
+ 188               	;---------------------------------------------------------------------------;
+ 189               	; Formatted string transmission
+ 190               	;
+ 191               	;Prototype: void xmitf (const prog_char *format, ...);
+ 192               	;Size: 70/64 words
+ 193               	
+ 194               	.global xmitf
+ 195               	.func xmitf
+ 196               	xmitf:
+ 196:suart.S       **** 	in	XL, _SFR_IO_ADDR(SPL)
+ 198               	#ifdef SPH
+ 198:suart.S       **** 	in	XH, _SFR_IO_ADDR(SPH)
+ 200               	#else
+ 201               		clr	XH
+ 202               	#endif
+ 202:suart.S       **** 	adiw	XL, 3		;X = pointer to arguments
+ 203:suart.S       **** 	ld	ZL, X+		;Z = pointer to format string
+ 204:suart.S       **** 	ld	ZH, X+		;/
+ 206               	
+ 206:suart.S       **** 00:	_LPMI	r24		;Get a format char
+ 207:suart.S       **** 	cpi	r24, 0		;End of format string?
+ 208:suart.S       **** 	breq	90f		;/
+ 209:suart.S       **** 	cpi	r24, '%'	;Is format?
+ 210:suart.S       **** 	breq	20f		;/
+ 211:suart.S       **** 01:	rcall	xmit		;Put a normal character
+ 212:suart.S       **** 	rjmp	00b		;/
+ 213:suart.S       **** 90:	ret
+ 215               	
+ 215:suart.S       **** 20:	ldi	r20, 0		;r20: digits
+ 216:suart.S       **** 	clt			;T: filler
+ 217:suart.S       **** 21:	_LPMI	r24		;Get flags
+ 218:suart.S       **** 	cpi	r24, '%'	;Is '%'?
+ 219:suart.S       **** 	breq	01b		;/
+ 220:suart.S       **** 	cpi	r24, '0'	;Zero filled?
+ 221:suart.S       **** 	brne	23f		;
+ 222:suart.S       **** 	set			;/
+ 223:suart.S       **** 22:	_LPMI	r24		;Get width
+ 224:suart.S       **** 23:	cpi	r24, '9'+1	;
+ 225:suart.S       **** 	brcc	24f		;
+ 226:suart.S       **** 	subi	r24, '0'	;
+ 227:suart.S       **** 	brcs	90b		;
+ 228:suart.S       **** 	lsl	r20		;
+ 229:suart.S       **** 	mov	r0, r20		;
+ 230:suart.S       **** 	lsl	r20		;
+ 231:suart.S       **** 	lsl	r20		;
+ 232:suart.S       **** 	add	r20, r0		;
+ 233:suart.S       **** 	add	r20, r24	;
+ 234:suart.S       **** 	rjmp	22b		;/
+ 236               	
+ 236:suart.S       **** 24:	mov	r23, r24	;r23 = type
+ 237:suart.S       **** 	ld	r24, X+		;r25:r24 = value
+ 238:suart.S       **** 	ld	r25, X+		;/
+ 239:suart.S       **** 	cpi	r23, 'c'	;Is type character?
+ 240:suart.S       **** 	breq	01b		;/
+ 241:suart.S       **** 	cpi	r23, 's'	;Is type string?
+ 242:suart.S       **** 	breq	50f		;/
+ 243:suart.S       **** 	cpi	r23, 'X'	;Is type hexdecimal?
+ 244:suart.S       **** 	ldi	r22, 16		;
+ 245:suart.S       **** 	breq	40f		;/
+ 246:suart.S       **** 	cpi	r23, 'u'	;Is type unsigned decimal?
+ 247:suart.S       **** 	ldi	r22, 10		;
+ 248:suart.S       **** 	breq	40f		;/
+ 249:suart.S       **** 	cpi	r23, 'd'	;Is type signed decimal?
+ 250:suart.S       **** 	ldi	r22, -10	;
+ 251:suart.S       **** 	breq	40f		;/
+ 252:suart.S       **** 	cpi	r23, 'b'	;Is type binary?, or abort.
+ 253:suart.S       **** 	ldi	r22, 2		;
+ 254:suart.S       **** 	brne	90b		;/
+ 255:suart.S       **** 40:	brtc	41f		;Output the value
+ 256:suart.S       **** 	neg	r20		;
+ 257:suart.S       **** 41:	push	ZH		;
+ 258:suart.S       **** 	push	ZL		;
+ 259:suart.S       **** 	rcall	xmitval		;
+ 260:suart.S       **** 41:	pop	ZL		;
+ 261:suart.S       **** 	pop	ZH		;
+ 262:suart.S       **** 	rjmp	00b		;/
+ 263:suart.S       **** 50:	push	ZH		;Output the ROM string
+ 264:suart.S       **** 	push	ZL		;
+ 265:suart.S       **** 	rcall	xmitstr		;
+ 266:suart.S       **** 	rjmp	41b		;/
+ 268               	.endfunc
+ 269               	
+ 270               	#endif	/* USE_STRFUNCS */
+ 271               	#endif	/* USE_OUTPUT */
+ 272               	
+ 273               	
+ 274               	
+ 275               	#ifdef	USE_INPUT
+ 276               	;---------------------------------------------------------------------------;
+ 277               	; Receive a byte
+ 278               	;
+ 279               	;Prototype: uint8_t rcvr (void);
+ 280               	;Size: 19 words
+ 281               	
+ 282               	.global rcvr
+ 283               	.func rcvr
+ 284               	rcvr:
+ 284:suart.S       **** 	in	r0, _SFR_IO_ADDR(SREG)	;Save flags
+ 286               	
+ 286:suart.S       **** 	ldi	r24, 0x80	;Receiving shift reg
+ 287:suart.S       **** 	cli			;Start critical section
+ 289               	
+ 289:suart.S       **** 1:	sbic	RXREG, RXBIT	;Wait for falling edge on MOSI pin
+ 290:suart.S       **** 	rjmp	1b
+ 291:suart.S       **** 2:	sbis	RXREG, RXBIT	;Wait for rising edge on MOSI pin
+ 292:suart.S       **** 	rjmp	2b
+ 293:suart.S       **** 	ldi	r25, BPS/2	;Wait for half bit time
+ 294:suart.S       **** 3:	dec	r25
+ 295:suart.S       **** 	brne	3b
+ 297               	
+ 297:suart.S       **** 4:	ldi	r25, BPS	;----- Bit receiving loop
+ 298:suart.S       **** 5:	dec	r25     	;Wait for a bit time
+ 299:suart.S       **** 	brne	5b		;/
+ 300:suart.S       **** 	lsr	r24     	;Next bit
+ 301:suart.S       **** 	sbis	RXREG, RXBIT	;Get a bit into r24.7
+ 302:suart.S       **** 	ori	r24, 0x80
+ 303:suart.S       **** 	brcc	4b	     	;All bits received?  no, continue
+ 305               	
+ 305:suart.S       **** 	out	_SFR_IO_ADDR(SREG), r0	;End of critical section
+ 306:suart.S       **** 	ret
+ 308               	.endfunc
+ 309               	
+ 310               	
+ 311               	#ifdef USE_STRFUNCS
+ 312               	;---------------------------------------------------------------------------;
+ 313               	; Console input
+ 314               	;
+ 315               	;Prototype: void rcvrstr (char *buffer, uint8_t buffsize);
+ 316               	;Size:  24/23 words
+ 317               	
+ 318               	.global rcvrstr
+ 319               	.func rcvrstr
+ 320               	rcvrstr:
+ 320:suart.S       **** 	_MOVW	ZH,ZL, r25,r24	;Pointer to input buffer
+ 321:suart.S       **** 	ldi	r21, 1		;Character count (+'\0')
+ 322:suart.S       **** 0:	rcall	rcvr		;Receive a character
+ 323:suart.S       **** 	cpi	r24, '\r'	;Enter?
+ 324:suart.S       **** 	breq	9f		;/
+ 325:suart.S       **** 	cpi	r24, '\b'	;Backspace?
+ 326:suart.S       **** 	breq	2f		;/
+ 327:suart.S       **** 	cp	r21, r22	;Buffer full?
+ 328:suart.S       **** 	brcc	0b		;/
+ 329:suart.S       **** 	cpi	r24, ' '	;Invisible code?
+ 330:suart.S       **** 	brcs	0b		;/
+ 331:suart.S       **** 	st	Z+, r24		;Store a character
+ 332:suart.S       **** 	inc	r21		;count++
+ 333:suart.S       **** 1:	rcall	xmit		;Show the character
+ 334:suart.S       **** 	rjmp	0b		;Continue
+ 335:suart.S       **** 2:	cpi	r21, 1		;Backspace: Buffer empty?
+ 336:suart.S       **** 	breq	0b		;/
+ 337:suart.S       **** 	dec	r21		;count--
+ 338:suart.S       **** 	sbiw	ZL, 1		;/
+ 339:suart.S       **** 	rjmp	1b		;Move cursor left
+ 340:suart.S       **** 9:	rcall	xmit		;Return cursor.
+ 341:suart.S       **** 	st	Z, r1		;Terminate with a '\0' and exit
+ 342:suart.S       **** 	ret			;/
+ 344               	.endfunc
+ 345               	
+ 346               	
+ 347               	
+ 348               	;---------------------------------------------------------------------------;
+ 349               	; Pick a value from a string
+ 350               	;
+ 351               	;Prototype: uint8_t pickval (char **string, uint16_t *result, uint8_t base);
+ 352               	;Size:  61/59 words
+ 353               	
+ 354               	.global pickval
+ 355               	.func pickval
+ 356               	pickval:
+ 356:suart.S       **** 	_MOVW	ZH,ZL, r25,r24	;Z = pointer to pointer to numerical string
+ 357:suart.S       **** 	ld	XL, Z+	 	;X = pointer to numerical string
+ 358:suart.S       **** 	ld	XH, Z+ 		;/
+ 359:suart.S       **** 	clr	r18     	;r19:r18 = input register
+ 360:suart.S       **** 	clr	r19     	;/
+ 361:suart.S       **** 	clt			;Unsigned or plus value
+ 363               	
+ 363:suart.S       **** 00:	ld	r24, X  	;Skip pre-spaces
+ 364:suart.S       **** 	cpi	r24, '-'	;Is signed minus value?
+ 365:suart.S       **** 	brne	01f		;
+ 366:suart.S       **** 	set			;
+ 367:suart.S       **** 	rjmp	16f		;/
+ 368:suart.S       **** 01:	cpi	r24, ' '	;End of string?
+ 369:suart.S       **** 	brcs	90f		;/
+ 370:suart.S       **** 	brne	11f
+ 371:suart.S       **** 	adiw	XL, 1
+ 372:suart.S       **** 	rjmp	00b
+ 374               	
+ 374:suart.S       **** 10:	ld	r24, X  	;Numerical string => Integer conversion loop
+ 375:suart.S       **** 	cpi	r24, ' '+1      ;Exit if end of a number
+ 376:suart.S       **** 	brcs	91f	    	;/
+ 377:suart.S       **** 11:	cpi	r24, 'a'	;Convert a digit to sequencial number
+ 378:suart.S       **** 	brcs	12f	    	;
+ 379:suart.S       **** 	subi	r24, 0x20       ;
+ 380:suart.S       **** 12:	subi	r24, '0'	;
+ 381:suart.S       **** 	brcs	90f	    	;
+ 382:suart.S       **** 	cpi	r24, 10 	;
+ 383:suart.S       **** 	brcs	13f	    	;
+ 384:suart.S       **** 	cpi	r24, 17 	;
+ 385:suart.S       **** 	brcs	90f	    	;
+ 386:suart.S       **** 	subi	r24, 7  	;
+ 387:suart.S       **** 13:	cp	r24, r20	;
+ 388:suart.S       **** 	brcc	90f	    	;/
+ 389:suart.S       **** 	ldi	r25, 17 	;r19:r18 *= r20(base)
+ 390:suart.S       **** 	sub	r21, r21	;
+ 391:suart.S       **** 14:	brcc	15f	    	;
+ 392:suart.S       **** 	add	r21, r20	;
+ 393:suart.S       **** 15:	ror	r21     	;
+ 394:suart.S       **** 	ror	r19     	;
+ 395:suart.S       **** 	ror	r18     	;
+ 396:suart.S       **** 	dec	r25     	;
+ 397:suart.S       **** 	brne	14b	    	;/
+ 398:suart.S       **** 	add	r18, r24	;r19:r18 += r24(digit)
+ 399:suart.S       **** 	adc	r19, r1 	;/
+ 400:suart.S       **** 16:	adiw	XL, 1	  	;Next digit
+ 401:suart.S       **** 	rjmp	10b
+ 403               	
+ 403:suart.S       **** 90:	clr	r24     	;Exit with error(0)
+ 404:suart.S       **** 	rjmp	92f
+ 405:suart.S       **** 91:	ldi	r24, 1  	;Exit with successful(1)
+ 406:suart.S       **** 	brtc	92f	    	;Negate when minus value
+ 407:suart.S       **** 	com	r18     	;
+ 408:suart.S       **** 	com	r19     	;
+ 409:suart.S       **** 	adc	r18, r1 	;
+ 410:suart.S       **** 	adc	r19, r1 	;/
+ 411:suart.S       **** 92:	st	-Z, XH	 	;Store the string pointer back
+ 412:suart.S       **** 	st	-Z, XL	 	;/
+ 413:suart.S       **** 	_MOVW	ZH,ZL, r23,r22	;Store the result
+ 414:suart.S       **** 	st	Z+, r18 	;
+ 415:suart.S       **** 	st	Z+, r19 	;/
+ 416:suart.S       **** 	ret
+ 418               	.endfunc
+DEFINED SYMBOLS
+             suart.S:69     .text:0000000000000000 xmit
+             suart.S:101    .text:0000000000000020 xmitstr
+             suart.S:129    .text:000000000000002e xmitval
+             suart.S:196    .text:0000000000000094 xmitf
+             suart.S:284    .text:0000000000000114 rcvr
+             suart.S:320    .text:000000000000013a rcvrstr
+             suart.S:356    .text:0000000000000168 pickval
+
+NO UNDEFINED SYMBOLS
