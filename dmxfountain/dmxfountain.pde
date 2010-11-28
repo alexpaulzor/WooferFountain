@@ -163,8 +163,9 @@ void check_mode()
   else if (modevalue < dmx_sound_chase) cur_mode = dmx_sound_chase;
   else if (modevalue < dmx_sound_strobe) cur_mode = dmx_sound_strobe;
   else if (modevalue < dmx_sound_solid) cur_mode = dmx_sound_solid;
-  else if (modevalue < dmx_chase) cur_mode = dmx_chase;
-  else if (modevalue < dmx_manual) cur_mode = dmx_manual;
+  else if (modevalue < dmx_manual_chase) cur_mode = dmx_manual_chase;
+  else if (modevalue < dmx_manual_strobe) cur_mode = dmx_manual_strobe;
+  else if (modevalue < dmx_manual_solid) cur_mode = dmx_manual_solid;
   else cur_mode = dmx_mode;
   
   if (cur_mode != dmx_mode)
@@ -181,7 +182,7 @@ void sample()
   unsigned long now = micros();
   while (now < next_sample_micros)
   {
-    delayMillis(next_sample_micros - now);
+    delayMicroseconds(next_sample_micros - now);
     now = micros();
   }
   next_sample_micros = now + SAMPLE_INTERVAL_MICROS;  
@@ -191,7 +192,7 @@ void sample()
   {
     sample_index = 0;
   }
-  samples[sample_index] = analogRead(SIGNAL_PIN) - DC_OFFSET;
+  samples[sample_index] = analogRead(AUDIO_PIN) - DC_OFFSET;
   samples[sample_index + FFT_N] = samples[sample_index];
 }
 
@@ -315,18 +316,17 @@ void fft_complete()
   for (int i = 0; i < SPECTRUM_SIZE; i++)
   {
     //if signal is too small, it doesn't count.
-    if (spectrum[i] < FFT_THRESHOLD) continue;
+    if (spectrum[i] < SPECTRUM_THRESHOLD) continue;
 
    //first, look if this one is already assigned to an led_channel
    led_channel_t * channel = find_channel(i);
    if (channel != NULL)
    {
-    channel -> last_seen = micros();
-    if (spectrum[i] > channel -> max_intensity)
-    {
-      channel -> max_intensity = spectrum[i];
-    }
-    continue;
+     if (spectrum[i] > channel -> max_intensity)
+     {
+       channel -> max_intensity = spectrum[i];
+     }
+     continue;
    }
    
    //not assigned already, find the oldest channel.
@@ -353,7 +353,7 @@ Do whatever step is next for fft (if applicable)
 void analyze()
 {
   // these two don't use fft
-  if (dmx_mode == dmx_chase || dmx_mode == dmx_manual) return;
+  if (InManualMode) return;
 
   if (next_fft_op == fft_op_input)
   {

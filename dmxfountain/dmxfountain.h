@@ -1,6 +1,7 @@
 
+#include <WProgram.h>
 #include <avr/pgmspace.h>
-#include <ffft.h>
+#include <avrfft/ffft.h>
 
 /*
 Pin configs:
@@ -17,6 +18,7 @@ A1: power for address DIP switch; when HIGH, D3 - D11 are read as DIP for addres
 #define LED_PINS {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A1, A2, A3, A4, A5}    //skip 2 because it's DMX in.
 
 #define AUDIO_PIN 0
+#define DC_OFFSET 512
 
 #define NUM_ADDRESS_PINS 9    //2^9 = 512
 #define ADDRESS_PINS {3, 4, 5, 6, 7, 8, 9, 10, 11}    //least significat -> most significant
@@ -69,6 +71,8 @@ typedef enum DMX_MODE
 #define InSoundMode (dmx_mode == auto_sound_strobe || dmx_mode == auto_sound_solid || dmx_mode == auto_sound_chase || dmx_mode == dmx_sound_chase || dmx_mode == dmx_sound_strobe || dmx_mode == dmx_sound_solid) 
 
 #define InStrobeMode (dmx_mode == auto_sound_strobe || dmx_mode == dmx_sound_strobe || dmx_mode == dmx_manual_strobe)
+
+#define InManualMode (dmx_mode == dmx_manual_chase || dmx_mode == dmx_manual_strobe || dmx_mode == dmx_manual_solid)
 
 /*
 DMX Protocol:
@@ -187,9 +191,9 @@ led_channel_t channels[NUM_LED_CHANNELS];
 //For dmx
 int dmx_address = 0;
 dmx_mode_t dmx_mode = auto_sound_strobe;
-unsigned long last_dmx_low_micros = 0;
-volitile boolean in_dmx_packet = false;
-byte dmx_values[NUM_DMX_CHANNELS];
+volatile unsigned long last_dmx_low_micros = 0;
+volatile boolean in_dmx_packet = false;
+volatile byte dmx_values[NUM_DMX_CHANNELS];
 
 //For sampling/FFT
 unsigned long next_sample_micros = 0;
